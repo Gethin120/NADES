@@ -40,30 +40,56 @@ class ABTEModule(nn.Module):
     def forward(
         self, tsv: Tensor, node_emb: Tensor, node_stats: Tensor, teacher_preds: Tensor, bucket_ids: Tensor = None
     ) -> Tuple[Tensor, Tensor]:
+        """
+        Args:
+            tsv: TSV tensor. Bucket-conditioned: [num_teachers, num_buckets, tsv_dim];
+                otherwise: [num_teachers, tsv_dim].
+            node_emb: Node embeddings [N, node_emb_dim]
+            node_stats: Node statistics/features [N, node_stats_dim]
+            teacher_preds: Teacher predictions [N, num_teachers, num_classes]
+            bucket_ids: Bucket ID per node [N], each in {1, 2, 3, 4}.
+                Buckets are computed from structural activity and feature strength:
+                - bucket 1: low activity + low feature strength
+                - bucket 2: high activity + low feature strength
+                - bucket 3: low activity + high feature strength
+                - bucket 4: high activity + high feature strength
+                If None, uses the non-bucket-conditioned mode.
+        """
         node_feat = torch.cat([node_emb, node_stats], dim=1)
         nf = self.node_proj(node_feat)
 
         N, T = node_feat.size(0), teacher_preds.size(1)
 
+        # Bucket-conditioned TSV handling
         if bucket_ids is not None and tsv.dim() == 3:
+            # Bucket-conditioned mode: tsv shape [num_teachers, num_buckets, tsv_dim]
+            # Select the bucket-specific TSV for each node.
             num_teachers, num_buckets, tsv_dim = tsv.shape
-            bucket_indices = bucket_ids - 1  # [N], 值域 {0, 1, 2, 3}
-
+            # bucket_ids are 1-indexed; convert to 0-indexed.
+            bucket_indices = bucket_ids - 1  # [N], values in {0, 1, 2, 3}
+            # Select bucket-specific TSV per node.
+            # (A gather-based implementation is possible; a simple loop is used here.)
             bucket_indices_expanded = bucket_indices.unsqueeze(
-                # [num_teachers, N, tsv_dim]
-                0).unsqueeze(-1).expand(num_teachers, -1, tsv_dim)
+                0
+            ).unsqueeze(-1).expand(num_teachers, -1, tsv_dim)
             tsv_selected_list = []
             for n in range(N):
-
+                # For node n, select each teacher's TSV in bucket bucket_indices[n].
                 node_tsv = tsv[:, bucket_indices[n].item(), :]
                 tsv_selected_list.append(node_tsv)
+            # [N, num_teachers, tsv_dim]
             tsv_selected = torch.stack(tsv_selected_list, dim=0)
+            # Project TSV: [N, num_teachers, hidden_dim//4]
             tf = self.tsv_proj(tsv_selected.view(N * T, -1)).view(N, T, -1)
         else:
+            # Non-bucket-conditioned mode: tsv shape [num_teachers, tsv_dim]
             tf = self.tsv_proj(tsv)  # [num_teachers, hidden_dim//4]
+            # [N, num_teachers, hidden_dim//4]
             tf = tf.unsqueeze(0).expand(N, -1, -1)
 
+        # [N, num_teachers, hidden_dim//2]
         nf_exp = nf.unsqueeze(1).expand(-1, T, -1)
+        # [N, num_teachers, hidden_dim//2 + hidden_dim//4]
         comb = torch.cat([nf_exp, tf], dim=2)
         scores = self.scorer(comb.view(N * T, -1)).view(N, T)
         weights = torch.softmax(scores, dim=1)
@@ -86,16 +112,27 @@ class Aggregator(nn.Module):
 
         self.abte_module = abte_module
         self.register_buffer("tsv", tsv)
+        # Privacy budget parameters
         self.delta = delta
         self.eta = eta
 
+        # --- Mechanism parameters ---
         self.gamma = gamma_dirichlet
         self.Delta_1_F = delta_1_F_sensitivity
 
     def dirichlet_mechanism(self, agg_soft_v):
+        """
+        Generate a noisy pseudo label via the Dirichlet mechanism.
+
+        Args:
+            agg_soft_v: Aggregated soft label [num_classes]
+
+        Returns:
+            noisy_label: Noisy pseudo label [num_classes]
+        """
 
         alpha_k = self.gamma + (agg_soft_v / self.Delta_1_F) * self.eta
-        alpha_k = torch.clamp(alpha_k, min=1e-6)  # 保证正数
+        alpha_k = torch.clamp(alpha_k, min=1e-6)  # ensure positivity
 
         dist = torch.distributions.dirichlet.Dirichlet(alpha_k)
         noisy_label = dist.sample()
@@ -103,22 +140,22 @@ class Aggregator(nn.Module):
 
     def compute_dirichlet_rdp_cost(self, alpha: float) -> float:
         """
-        计算 Dirichlet/Gamma 机制 (M_ans) 的单轮 RDP 成本。
-        (基于 Balle et al. 2020, Theorem 1 的标准 Gamma 机制 RDP)
+        Compute the per-query RDP cost of the Dirichlet/Gamma mechanism (M_ans).
+        (Based on the standard Gamma mechanism RDP in Balle et al., 2020, Theorem 1.)
 
         Args:
-            alpha: RDP阶数
+            alpha: RDP order
 
         Returns:
-            rdp_cost: 单次查询的RDP成本
+            rdp_cost: RDP cost for a single query
         """
-        # 检查约束条件
+        # Constraint check
         if self.eta <= alpha * self.Delta_1_F:
-            # 如果 eta 不够大，无法满足 (alpha, delta)-RDP，
-            # 返回无穷大成本，RDP 会计器会忽略这个 alpha
+            # If eta is too small, we cannot satisfy (alpha, delta)-RDP.
+            # Return infinite cost; the accountant will ignore this alpha.
             return float("inf")
 
-        # 计算两个 log 项
+        # Two log terms
         term1 = (alpha - 1) * math.log(1 - (self.Delta_1_F / self.eta))
         term2 = -math.log(1 - (alpha * self.Delta_1_F / self.eta))
 
@@ -132,22 +169,21 @@ class Aggregator(nn.Module):
         node_embeddings: Tensor,  # [N, hidden_dim]
         node_stats: Tensor,  # [N, stats_dim]
         teacher_preds: Tensor,  # [N, S, num_classes]
-        bucket_ids: Tensor = None,  # [N]，桶编号，可选
+        bucket_ids: Tensor = None,  # [N], optional bucket IDs
     ) -> Tuple[Tensor, Tensor]:
         """
-        使用ABTE模块批量聚合教师预测
+        Batch-aggregate teacher predictions using ABTE.
 
         Args:
-            node_embeddings: 节点嵌入 [N, hidden_dim]
-            node_stats: 节点统计特征 [N, stats_dim]
-            teacher_preds: 教师预测（概率格式） [N, S, num_classes]
-            bucket_ids: 每个节点对应的桶编号 [N]，每个元素值为 {1, 2, 3, 4} 之一。
-                        桶编号根据节点的结构活跃度和特征强度自动计算。
-                        如果为None则使用非桶条件化模式
+            node_embeddings: Node embeddings [N, hidden_dim]
+            node_stats: Node statistics/features [N, stats_dim]
+            teacher_preds: Teacher predictions (probabilities) [N, S, num_classes]
+            bucket_ids: Bucket ID per node [N], each in {1, 2, 3, 4}.
+                If None, uses the non-bucket-conditioned mode.
 
         Returns:
-            agg_logits: 聚合后的logits [N, num_classes]
-            agg_weights: 注意力权重 [N, S]
+            agg_logits: Aggregated logits [N, num_classes]
+            agg_weights: Attention weights [N, S]
         """
         self.abte_module.eval()
         with torch.no_grad():
@@ -161,13 +197,13 @@ class Aggregator(nn.Module):
         agg_soft_labels: Tensor,  # [N, num_classes]
     ) -> Tensor:
         """
-        批量对聚合后的软标签添加Dirichlet噪声
+        Add Dirichlet noise to aggregated soft labels in batch.
 
         Args:
-            agg_soft_labels: 聚合后的软标签（概率格式） [N, num_classes]
+            agg_soft_labels: Aggregated soft labels (probabilities) [N, num_classes]
 
         Returns:
-            noisy_labels: 加噪后的伪标签 [N, num_classes]
+            noisy_labels: Noisy pseudo labels [N, num_classes]
         """
         noisy_labels = []
         for i in range(agg_soft_labels.size(0)):
@@ -182,14 +218,14 @@ class Aggregator(nn.Module):
         alphas: Optional[List[float]] = None,
     ) -> Dict:
         """
-        计算多次查询的总RDP成本并转换为(epsilon, delta)-DP
+        Compute total RDP cost over multiple queries and convert to (epsilon, delta)-DP.
 
         Args:
-            num_queries: 查询次数
-            alphas: RDP阶数列表，如果为None则使用默认值
+            num_queries: Number of queries
+            alphas: RDP orders; if None, uses defaults
 
         Returns:
-            result_dict: 包含RDP核算结果的字典
+            result_dict: Dictionary containing the RDP accounting results
         """
         from gaussian_accountant.analysis import rdp as privacy_analysis
         from gaussian_accountant.rdp import RDPAccountant
@@ -206,7 +242,7 @@ class Aggregator(nn.Module):
                 "total_alpha_count": 0,
             }
 
-        # 计算每个alpha阶的单次查询RDP成本
+        # Per-alpha per-query RDP cost
         rdp_costs_total = []
         valid_alphas = []
         total_alpha_count = 0
@@ -216,14 +252,14 @@ class Aggregator(nn.Module):
                 total_alpha_count += 1
                 rdp_cost_single = self.compute_dirichlet_rdp_cost(alpha)
 
-                # 检查是否有效（不是inf或nan）
+                # Validate (not inf/nan)
                 if rdp_cost_single != float("inf") and not math.isnan(rdp_cost_single):
-                    # 对于T次独立操作，总RDP成本为T倍单次成本
+                    # For T independent operations, total RDP is T times the single-query cost.
                     rdp_cost_total = num_queries * rdp_cost_single
                     rdp_costs_total.append(rdp_cost_total)
                     valid_alphas.append(alpha)
 
-        # 转换为(epsilon, delta)-DP
+        # Convert to (epsilon, delta)-DP
         if len(valid_alphas) > 0 and len(rdp_costs_total) > 0:
             try:
                 epsilon_final, best_alpha = privacy_analysis.get_privacy_spent(
@@ -251,7 +287,7 @@ class Aggregator(nn.Module):
         else:
             return {
                 "total_queries": num_queries,
-                "error": "所有alpha阶的RDP成本计算失败（可能eta太小）",
+                "error": "RDP cost computation failed for all alpha orders (eta may be too small)",
                 "epsilon_final_rdp": None,
                 "best_alpha": None,
                 "valid_alphas_count": 0,

@@ -40,61 +40,30 @@ class ABTEModule(nn.Module):
     def forward(
         self, tsv: Tensor, node_emb: Tensor, node_stats: Tensor, teacher_preds: Tensor, bucket_ids: Tensor = None
     ) -> Tuple[Tensor, Tensor]:
-        """
-        Args:
-            tsv: TSV张量，如果是桶条件化则为 [num_teachers, num_buckets, tsv_dim]，否则为 [num_teachers, tsv_dim]
-            node_emb: 节点嵌入 [N, node_emb_dim]
-            node_stats: 节点统计特征 [N, node_stats_dim]
-            teacher_preds: 教师预测 [N, num_teachers, num_classes]
-            bucket_ids: 每个节点对应的桶编号 [N]，每个元素值为 {1, 2, 3, 4} 之一。
-                        桶编号根据节点的结构活跃度和特征强度自动计算：
-                        - 桶1: 低活跃度 + 低特征强度
-                        - 桶2: 高活跃度 + 低特征强度  
-                        - 桶3: 低活跃度 + 高特征强度
-                        - 桶4: 高活跃度 + 高特征强度
-                        如果为None则使用非桶条件化模式
-        """
         node_feat = torch.cat([node_emb, node_stats], dim=1)
         nf = self.node_proj(node_feat)
 
         N, T = node_feat.size(0), teacher_preds.size(1)
 
-        # 处理桶条件化TSV
         if bucket_ids is not None and tsv.dim() == 3:
-            # 桶条件化模式: tsv shape [num_teachers, num_buckets, tsv_dim]
-            # 为每个节点选择对应桶的TSV
             num_teachers, num_buckets, tsv_dim = tsv.shape
-            # bucket_ids是1-indexed，需要转换为0-indexed
             bucket_indices = bucket_ids - 1  # [N], 值域 {0, 1, 2, 3}
-            # 为每个节点选择对应桶的TSV
-            # 使用torch.gather在buckets维度上选择
-            # 构建索引: [num_teachers, N, 1] 用于gather
+
             bucket_indices_expanded = bucket_indices.unsqueeze(
                 # [num_teachers, N, tsv_dim]
                 0).unsqueeze(-1).expand(num_teachers, -1, tsv_dim)
-            # 使用gather: 在dim=1（buckets维度）上根据bucket_indices选择
-            # tsv: [num_teachers, num_buckets, tsv_dim]
-            # index: [num_teachers, N, tsv_dim]，但gather需要index的shape与output一致
-            # 更简单的方法：使用列表推导式或循环
             tsv_selected_list = []
             for n in range(N):
-                # 对于节点n，选择每个教师对应bucket_indices[n]桶的TSV
-                # [num_teachers, tsv_dim]
+
                 node_tsv = tsv[:, bucket_indices[n].item(), :]
                 tsv_selected_list.append(node_tsv)
-            # [N, num_teachers, tsv_dim]
             tsv_selected = torch.stack(tsv_selected_list, dim=0)
-            # 投影TSV: [N, num_teachers, hidden_dim//4]
             tf = self.tsv_proj(tsv_selected.view(N * T, -1)).view(N, T, -1)
         else:
-            # 非桶条件化模式: tsv shape [num_teachers, tsv_dim]
             tf = self.tsv_proj(tsv)  # [num_teachers, hidden_dim//4]
-            # [N, num_teachers, hidden_dim//4]
             tf = tf.unsqueeze(0).expand(N, -1, -1)
 
-        # [N, num_teachers, hidden_dim//2]
         nf_exp = nf.unsqueeze(1).expand(-1, T, -1)
-        # [N, num_teachers, hidden_dim//2 + hidden_dim//4]
         comb = torch.cat([nf_exp, tf], dim=2)
         scores = self.scorer(comb.view(N * T, -1)).view(N, T)
         weights = torch.softmax(scores, dim=1)
@@ -117,25 +86,13 @@ class Aggregator(nn.Module):
 
         self.abte_module = abte_module
         self.register_buffer("tsv", tsv)
-        # 隐私预算参数:
         self.delta = delta
         self.eta = eta
 
-        # --- 机制参数 ---
         self.gamma = gamma_dirichlet
         self.Delta_1_F = delta_1_F_sensitivity
 
     def dirichlet_mechanism(self, agg_soft_v):
-        """
-        使用Dirichlet机制生成加噪的伪标签
-
-        Args:
-            agg_soft_v: 聚合后的软标签 [num_classes]
-            epsilon_ans: 回答阶段的隐私预算
-
-        Returns:
-            noisy_label: 加噪后的伪标签 [num_classes]
-        """
 
         alpha_k = self.gamma + (agg_soft_v / self.Delta_1_F) * self.eta
         alpha_k = torch.clamp(alpha_k, min=1e-6)  # 保证正数

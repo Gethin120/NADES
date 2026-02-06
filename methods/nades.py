@@ -50,7 +50,7 @@ class NADES(FraudDetection):
         patience: int,
         privacy_ratio,
         # Partition method
-        partition_method,  # 单一划分方法，默认 "D"
+        partition_method,  # Single partition method, default "D"
         num_partitions,
         max_overlap_per_node,
         # Teacher
@@ -71,7 +71,7 @@ class NADES(FraudDetection):
         Delta_alpha_bound: float = 1.0,
         evaluate_abte_upper_bound: bool = False,
         metadata=None,
-        cache_dir: str = None,  # 缓存目录，默认使用内置路径
+        cache_dir: str = None,  # Cache directory; defaults to the built-in path
 
         **kwargs,  # Accept any other parameters for compatibility
     ):
@@ -161,7 +161,7 @@ class NADES(FraudDetection):
         self.teachers: List[TeacherModule] = []
         # [num_teachers, num_buckets, 6] for bucket-conditioned TSV
         self.tsv: torch.Tensor | None = None
-        self.bucket_thresholds: dict | None = None  # 存储分桶阈值 {tau_deg, tau_fea}
+        self.bucket_thresholds: dict | None = None  # Bucket thresholds {tau_deg, tau_fea}
         self.teacher_predictions: torch.Tensor | None = None  # [N_pub, S, C]
 
     @property
@@ -173,16 +173,18 @@ class NADES(FraudDetection):
         self.logger.info("(1) Prepare private and public data")
         self._prepare_private_public()
 
-        self.logger.info(f"(2) 使用{self.partition_method}方法进行图划分和子图提取")
+        self.logger.info(
+            f"(2) Partition graph and extract subgraphs using method '{self.partition_method}'"
+        )
 
-        # 构建缓存路径
+        # Build cache paths
         # partition_subgraphs_path = os.path.join(
         # self.cache_dir, f"partition_{self.partition_method}_subgraphs.pt"
         # )
         partition_subgraphs_path = None
         # tsv_path = os.path.join(self.cache_dir, f"tsv_{self.partition_method}.pt")
         tsv_path = None
-        # 调用单一划分方法
+        # Run the selected partition method
         self.subgraphs = self.partitioner.partition(
             method=self.partition_method,
             data=self.private_data,
@@ -197,23 +199,24 @@ class NADES(FraudDetection):
         self.info["num_subgraphs"] = len(self.subgraphs)
         self.info["max_overlap_per_node"] = self.s_max
         self.logger.info(
-            f"划分完成: 方法: {self.partition_method}, 子图数量: {len(self.subgraphs)}, s_max: {self.s_max}"
+            f"Partitioning completed: method={self.partition_method}, "
+            f"num_subgraphs={len(self.subgraphs)}, s_max={self.s_max}"
         )
 
         self.logger.info("(3) Train teachers with Trainer")
         self.teachers = self._train_teachers_with_trainer(self.subgraphs)
 
-        # 计算桶条件化TSV（在教师训练后）
+        # Compute bucket-conditioned TSV (after teacher training)
         self.logger.info("(3.5) Compute bucket-conditioned TSV")
         self.tsv, self.bucket_thresholds = self._compute_bucket_conditioned_tsv(
             self.public_data,
             self.teachers,
             num_buckets=4,
-            anchor_ratio=0.1,  # 使用10%的公共节点作为锚点
+            anchor_ratio=0.1,  # Use 10% of public nodes as anchors
             logger=self.logger,
         )
 
-        # 计算 TSV 后清理内存
+        # Free GPU memory after TSV computation
         torch.cuda.empty_cache()
 
         self.logger.info("(4) Student SSL pretraining on public")
@@ -257,13 +260,13 @@ class NADES(FraudDetection):
 
     def _save_info_to_csv(self) -> None:
         if not self.info:
-            self.logger.warning("self.info 为空，跳过写入 CSV")
+            self.logger.warning("self.info is empty; skipping CSV write")
             return
         csv_path = os.path.join(self.cache_dir, "pdp_gkd_info.csv")
         try:
             flat_info = self._flatten_info(self.info)
             if not flat_info:
-                self.logger.warning("展开后的 self.info 为空，跳过写入 CSV")
+                self.logger.warning("Flattened self.info is empty; skipping CSV write")
                 return
             existing_fieldnames: List[str] = []
             existing_rows: List[dict] = []
@@ -286,9 +289,9 @@ class NADES(FraudDetection):
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
                 writer.writerows(existing_rows)
-            self.logger.info(f"self.info 已写入 {csv_path}")
+            self.logger.info(f"self.info written to {csv_path}")
         except OSError as exc:
-            self.logger.error(f"写入 self.info CSV 失败: {exc}")
+            self.logger.error(f"Failed to write self.info to CSV: {exc}")
 
     def _flatten_info(self, info: dict) -> dict:
         flat: dict = {}
@@ -315,24 +318,25 @@ class NADES(FraudDetection):
     ) -> List[TeacherModule]:
         teachers: List[TeacherModule] = []
         for i, sub in enumerate(subgraphs):
-            # 再次验证子图有效性
+            # Validate subgraph again
             if sub.num_nodes < 2:
                 self.logger.warning(
-                    f"跳过 Teacher {i + 1}：节点数过少 ({sub.num_nodes})"
+                    f"Skipping Teacher {i + 1}: too few nodes ({sub.num_nodes})"
                 )
                 continue
             if sub.edge_index.size(1) == 0:
-                self.logger.warning(f"跳过 Teacher {i + 1}：没有边")
+                self.logger.warning(f"Skipping Teacher {i + 1}: no edges")
                 continue
             if not hasattr(sub, "train_mask") or not sub.train_mask.any():
-                self.logger.warning(f"跳过 Teacher {i + 1}：没有训练节点")
+                self.logger.warning(f"Skipping Teacher {i + 1}: no training nodes")
                 continue
-            # 检查训练集中是否有多个类别
+            # Ensure training set has at least two classes
             train_labels = sub.y[sub.train_mask]
             unique_labels = torch.unique(train_labels)
             if len(unique_labels) < 2:
                 self.logger.warning(
-                    f"跳过 Teacher {i + 1}：训练集只有单一类别 (类别={unique_labels.tolist()})"
+                    f"Skipping Teacher {i + 1}: training set has only one class "
+                    f"(classes={unique_labels.tolist()})"
                 )
                 continue
 
@@ -353,8 +357,9 @@ class NADES(FraudDetection):
             )
             optimizer = torch.optim.Adam(teacher.parameters(), lr=self.lr)
 
-            # 猴子补丁：替换 Trainer.step 方法，在 backward 之后、optimizer.step() 之前添加梯度裁剪
-            # 使用默认参数捕获循环变量，避免闭包问题
+            # Monkey patch: replace Trainer.step to add gradient clipping after backward
+            # and before optimizer.step(). Use default args to capture loop vars and
+            # avoid closure issues.
             def teacher_step(
                 tr, batch, stage, prefix, teacher_idx=i, subgraph=sub
             ) -> Metrics:
@@ -364,7 +369,7 @@ class NADES(FraudDetection):
                 grad_state = torch.is_grad_enabled()
                 torch.set_grad_enabled(stage == "train")
 
-                # 调用 model.step
+                # Call model.step
                 loss, logits_masked, y = teacher.step(
                     batch,
                     stage=stage,
@@ -374,18 +379,19 @@ class NADES(FraudDetection):
                 torch.set_grad_enabled(grad_state)
 
                 if stage == "train" and loss is not None:
-                    # 检查 loss 是否为 NaN 或 Inf
+                    # Check loss for NaN or Inf
                     if torch.isnan(loss) or torch.isinf(loss):
                         self.logger.error(
-                            f"Teacher {teacher_idx + 1} 训练时出现无效损失值: {loss.item()}, "
-                            f"子图节点数={subgraph.num_nodes}, 训练节点数={subgraph.train_mask.sum().item()}"
+                            f"Teacher {teacher_idx + 1} produced an invalid loss "
+                            f"(loss={loss.item()}), subgraph_nodes={subgraph.num_nodes}, "
+                            f"train_nodes={subgraph.train_mask.sum().item()}"
                         )
-                        # 跳过这个 batch，不进行反向传播
+                        # Skip this batch and do not backpropagate.
                         return logits_masked, y, loss
 
                     with torch.autograd.set_detect_anomaly(True):
                         loss.backward()
-                        # 梯度裁剪：在 backward 之后、step 之前
+                        # Gradient clipping: after backward, before step.
                         torch.nn.utils.clip_grad_norm_(
                             teacher.parameters(), max_norm=self.max_grad_norm
                         )
@@ -395,7 +401,7 @@ class NADES(FraudDetection):
 
             trainer_t.step = types.MethodType(teacher_step, trainer_t)
 
-            # 单子图作为 dataloader；mask 内已含 train/val
+            # Single subgraph as a dataloader; masks already contain train/val.
             trainer_t.fit(
                 model=teacher,
                 epochs=self.teacher_epochs,
@@ -411,14 +417,14 @@ class NADES(FraudDetection):
             )
             teachers.append(teacher)
 
-            # 清理 trainer 和 optimizer 以释放内存
+            # Delete trainer and optimizer to free memory.
             del trainer_t, optimizer
             torch.cuda.empty_cache()
 
         return teachers
 
     def _run_ssl_with_trainer_monkey(self, pub: Data) -> None:
-        """路由到对应的 SSL 训练方法"""
+        """Route to the selected SSL training method."""
         self.info["ssl_method"] = self.ssl_method
 
         method_map = {
@@ -438,15 +444,16 @@ class NADES(FraudDetection):
 
     def _skip_ssl_pretraining(self, pub: Data) -> None:
         """
-        消融实验：跳过SSL预训练，编码器保持随机初始化状态
-        在生成伪标签时，NHV（节点隐藏向量）将使用随机初始化的编码器对节点特征进行编码
+        Ablation: skip SSL pretraining and keep the encoder randomly initialized.
+        When generating pseudo labels, NHV (node hidden vectors) are encoded using the
+        randomly initialized encoder.
         """
         self.info["ssl_method"] = "none (random initialization)"
         self.logger.info(
-            "跳过SSL预训练：编码器保持随机初始化状态，"
-            "将使用随机初始化的编码器对节点特征进行编码以生成NHV"
+            "Skipping SSL pretraining: encoder remains randomly initialized; "
+            "NHV will be generated by encoding node features with the random encoder."
         )
-        # 确保编码器在评估模式下（虽然参数是随机的）
+        # Ensure eval mode (even though weights are random).
         self.student_encoder.eval()
         self.student.eval()
 
@@ -458,7 +465,7 @@ class NADES(FraudDetection):
         val_dataloader,
         scheduler_t_max: int = None,
     ) -> dict:
-        """运行 SSL 训练的通用流程"""
+        """Common routine for running SSL training."""
         device = self.device
         model = model.to(device)
 
@@ -529,7 +536,7 @@ class NADES(FraudDetection):
             trainer_ssl.loop = orig_loop
 
     def _ssl_train_infomax(self, pub: Data) -> None:
-        """训练 Infomax SSL 模型"""
+        """Train the Infomax SSL model."""
         infomax_model = Infomax(
             encoder=self.student_encoder,
             hidden_channels=self.hidden_channels,
@@ -548,7 +555,7 @@ class NADES(FraudDetection):
         self.info["ssl_best_metrics"] = best_metrics
 
     def _ssl_train_grace(self, pub: Data) -> None:
-        """训练 GRACE SSL 模型"""
+        """Train the GRACE SSL model."""
         device = self.device
 
         contrast_model = DualBranchContrast(
@@ -592,7 +599,7 @@ class NADES(FraudDetection):
         self.info["ssl_best_metrics"] = best_metrics
 
     def _ssl_train_graphmae(self, pub: Data) -> None:
-        """训练 GraphMAE SSL 模型"""
+        """Train the GraphMAE SSL model."""
         device = self.device
 
         graphmae = GraphMAE(
@@ -621,34 +628,36 @@ class NADES(FraudDetection):
 
     def _generate_pseudo_labels(self) -> None:
         """
-        初始化聚合器（ABTE模块和Aggregator）、预计算缓存，并生成隐私保护的伪标签
-        包括：
-        1. 初始化ABTE模块和聚合器
-        2. 预计算教师预测缓存和节点统计缓存
-        3. 生成隐私保护的伪标签并存储到public_data
+        Initialize the aggregator (ABTE module + Aggregator), precompute caches,
+        and generate privacy-preserving pseudo labels.
+
+        Steps:
+        1) Initialize ABTE module and aggregator
+        2) Precompute teacher-prediction cache and node-statistics cache
+        3) Generate privacy-preserving pseudo labels and store them in public_data
         """
-        # 初始化ABTE模块
-        # TSV形状: [num_teachers, num_buckets, 6] 或 [num_teachers, 6]
+        # Initialize ABTE module.
+        # TSV shape: [num_teachers, num_buckets, 6] or [num_teachers, 6]
         if self.tsv.dim() == 3:
-            tsv_dim = self.tsv.shape[2]  # 桶条件化TSV
+            tsv_dim = self.tsv.shape[2]  # Bucket-conditioned TSV
         else:
-            tsv_dim = self.tsv.shape[1]  # 非桶条件化TSV
+            tsv_dim = self.tsv.shape[1]  # Non-bucket-conditioned TSV
 
         self.attn = ABTEModule(
             tsv_dim=tsv_dim,
             node_emb_dim=self.hidden_channels,
-            node_stats_dim=2,  # NHV包含 [log(1+deg), ||x_v||_2]，共2个统计特征
+            node_stats_dim=2,  # NHV includes [log(1+deg), ||x_v||_2]
             num_teachers=len(self.teachers),
             num_classes=self.out_channels,
             hidden_dim=self.hidden_channels,
         ).to(self.device)
 
-        # 设置隐私参数
+        # Privacy parameters
 
         self.delta_1_F = self.s_max * \
             (self.Delta_p_bound + self.Delta_alpha_bound)
 
-        # 初始化聚合器
+        # Initialize aggregator
         self.aggregator = Aggregator(
             abte_module=self.attn,
             tsv=self.tsv,
@@ -658,20 +667,21 @@ class NADES(FraudDetection):
             delta_1_F_sensitivity=self.delta_1_F,
         )
 
-        # 预计算教师预测为概率格式 [N, S, num_classes]，其中S是教师数量
+        # Precompute teacher predictions as logits [N, S, num_classes], where S is
+        # the number of teachers.
         with torch.no_grad():
             self.teacher_preds_cache = self._predict_public_by_teachers(
                 self.public_data, self.teachers
             )
             self.public_data.teacher_preds_cache = self.teacher_preds_cache
 
-        # 预计算所有节点的统计特征 [N, stats_dim]
+        # Precompute per-node statistics [N, stats_dim].
         self.node_stats_cache = self._compute_node_stats(self.public_data).to(
             self.device
         )
         self.public_data.node_stats = self.node_stats_cache
 
-        # 生成隐私保护的伪标签
+        # Generate privacy-preserving pseudo labels.
         self.pseudo_labels_dict = self._query_pseudo_labels_random_abte(
             self.public_data
         )
@@ -683,22 +693,24 @@ class NADES(FraudDetection):
 
     def _generate_pseudo_labels_mean(self) -> None:
         """
-        消融实验：使用教师预测的平均值生成伪标签（不使用ABTE）
-        包括：
-        1. 预计算教师预测缓存
-        2. 预计算节点统计缓存（虽然不使用，但保持一致性）
-        3. 生成基于教师平均预测的伪标签并存储到public_data
+        Ablation: generate pseudo labels using the mean of teacher predictions
+        (without ABTE).
+
+        Steps:
+        1) Precompute teacher-prediction cache
+        2) Precompute node-statistics cache (kept for consistency)
+        3) Generate pseudo labels from mean teacher predictions and store them in public_data
         """
-        # 设置隐私参数
+        # Privacy parameters
         self.delta_1_F = self.s_max * \
             (self.Delta_p_bound + self.Delta_alpha_bound)
 
-        # 初始化聚合器（仅用于加噪，不需要ABTE模块）
-        # 创建一个虚拟的ABTE模块（不会被使用）
+        # Initialize aggregator (noise only; ABTE is not used here).
+        # Create a dummy ABTE module (won't be used).
         dummy_abte = ABTEModule(
             tsv_dim=self.tsv.shape[1],
             node_emb_dim=self.hidden_channels,
-            node_stats_dim=2,  # NHV包含 [log(1+deg), ||x_v||_2]，共2个统计特征
+            node_stats_dim=2,  # NHV includes [log(1+deg), ||x_v||_2]
             num_teachers=len(self.teachers),
             num_classes=self.out_channels,
             hidden_dim=self.hidden_channels,
@@ -713,20 +725,21 @@ class NADES(FraudDetection):
             delta_1_F_sensitivity=self.delta_1_F,
         )
 
-        # 预计算教师预测为概率格式 [N, S, num_classes]，其中S是教师数量
+        # Precompute teacher predictions as logits [N, S, num_classes], where S is
+        # the number of teachers.
         with torch.no_grad():
             self.teacher_preds_cache = self._predict_public_by_teachers(
                 self.public_data, self.teachers
             )
             self.public_data.teacher_preds_cache = self.teacher_preds_cache
 
-        # 预计算所有节点的统计特征 [N, stats_dim]（虽然不使用，但保持一致性）
+        # Precompute per-node statistics [N, stats_dim] (kept for consistency).
         self.node_stats_cache = self._compute_node_stats(self.public_data).to(
             self.device
         )
         self.public_data.node_stats = self.node_stats_cache
 
-        # 生成基于教师平均预测的伪标签
+        # Generate pseudo labels from mean teacher predictions.
         self.pseudo_labels_dict = self._query_pseudo_labels_mean(
             self.public_data)
         self.logger.info(
@@ -745,7 +758,7 @@ class NADES(FraudDetection):
         # self.info["lambda_con"] = self.lambda_con
 
         def finetune_loop(tr, dataloader, stage: str, prefix: str) -> Metrics:
-            # model 是 StudentModel
+            # model is a StudentModel
             model = tr.model
             device = next(model.parameters()).device
             logits_list = []
@@ -757,32 +770,32 @@ class NADES(FraudDetection):
                     tr.optimizer.zero_grad(set_to_none=True)
                 grad_state = torch.is_grad_enabled()
                 torch.set_grad_enabled(stage == "train")
-                # --- 1. 学生模型前向传播 ---
-                #  model 只在小批次 'batch' 上运行
+                # --- 1) Forward pass (student) ---
+                # model runs on the mini-batch only.
                 pi_v_all_batch, _ = model(
                     batch.x, batch.edge_index, return_intermediate=True
                 )
 
-                # 取出"中心"节点的结果（只取有效的输入节点）
+                # Extract "center" node outputs (only the valid input nodes).
                 valid_batch_size = B_t_indices.numel()
                 log_pi_B = pi_v_all_batch[:valid_batch_size]
                 y_B = batch.y[:valid_batch_size]
 
-                # --- 2. 计算监督损失 L_sup ---
-                # 只对有伪标签的节点计算监督损失
+                # --- 2) Supervised loss (L_sup) ---
+                # Compute supervision only for nodes that have pseudo labels.
                 sup_loss = None
                 if (
                     stage == "train"
                     and hasattr(self.public_data, "has_pseudo_label")
                     and self.public_data.has_pseudo_label is not None
                 ):
-                    # 获取当前批次中有伪标签的节点
+                    # Nodes in the batch that have pseudo labels
                     batch_has_pseudo = self.public_data.has_pseudo_label[
                         B_t_indices
                     ]  # [B]
 
                     if batch_has_pseudo.any():
-                        # 获取有伪标签的节点的预测和伪标签
+                        # Predictions and pseudo labels for pseudo-labeled nodes
                         pseudo_labels_B = self.public_data.pseudo_labels[
                             B_t_indices
                         ]  # [B, K]
@@ -792,7 +805,7 @@ class NADES(FraudDetection):
                             batch_has_pseudo
                         ]  # [B_pseudo, K]
 
-                        # 计算双向KL散度
+                        # Symmetric KL divergence
                         sup_loss_1 = F.kl_div(
                             log_pi_pseudo,
                             pseudo_labels_pseudo,
@@ -807,15 +820,15 @@ class NADES(FraudDetection):
                         )
                         sup_loss = (sup_loss_1 + sup_loss_2) / 2
                     else:
-                        # 如果没有伪标签节点，监督损失为0
+                        # No pseudo-labeled nodes -> zero supervised loss
                         sup_loss = torch.tensor(
                             0.0, device=device, requires_grad=True)
 
-                # --- 3. 计算 L_con ---
+                # --- 3) Consistency loss (L_con) ---
                 with torch.no_grad():
-                    pi = log_pi_B.exp()  # 复用计算
+                    pi = log_pi_B.exp()  # Reuse computed probabilities
 
-                #  必须对 *同一个批次* 进行增强
+                # Apply augmentation on the same batch
                 aug_x, aug_edge_index, _ = augmentor_er(
                     batch.x, batch.edge_index, edge_weight=None
                 )
@@ -841,7 +854,7 @@ class NADES(FraudDetection):
                 )
                 con_loss = (con_loss_1 + con_loss_2) / 2
 
-                # --- 4. 总损失与更新 ---
+                # --- 4) Total loss and update ---
                 if sup_loss is not None:
                     loss = self.lambda_sup * sup_loss + self.lambda_con * con_loss
                 else:
@@ -857,7 +870,7 @@ class NADES(FraudDetection):
 
             for batch in dataloader:
                 batch = batch.to(device)
-                B_t_indices = batch.input_id  # 全局索引
+                B_t_indices = batch.input_id  # Global indices
                 logits, y = finetune_step(tr, batch, stage, prefix)
                 # logits, y = finetune_step_privacy(tr, batch, stage, prefix)
                 logits_list.append(logits)
@@ -942,38 +955,38 @@ class NADES(FraudDetection):
             self.logger.warning(f"Failed to save cached splits: {e}")
 
     def _compute_node_stats(self, pub: Data) -> Tensor:
-        # 使用 partitioner 的 _degree_vector 方法
+        # Use partitioner's _degree_vector method
         deg = self.partitioner._degree_vector(pub).float().to(self.device)
-        # 计算 log(1+deg_pub(v))，与文档一致
+        # Compute log(1 + deg_pub(v)), consistent with the docs
         log_deg = torch.log(1 + deg + 1e-8)
 
-        # 计算特征范数 ||x_v||_2（原始值，不归一化）
+        # Compute feature norm ||x_v||_2 (raw, not normalized)
         feats = pub.x.to(self.device)
         feat_norm = torch.norm(feats, dim=1)
 
-        # 返回 [log(1+deg), ||x_v||_2]
+        # Return [log(1+deg), ||x_v||_2]
         return torch.stack([log_deg, feat_norm], dim=1)
 
     def _compute_bucket_id(self, deg_pub: Tensor, feat_norm: Tensor, tau_deg: float, tau_fea: float) -> Tensor:
         """
-        计算节点的桶编号
+        Compute per-node bucket IDs.
 
         Args:
-            deg_pub: 公共图上的度数 [N]
-            feat_norm: 特征范数 [N]
-            tau_deg: 度数的中位数阈值
-            tau_fea: 特征强度的中位数阈值
+            deg_pub: Degree on the public graph [N]
+            feat_norm: Feature norm [N]
+            tau_deg: Median threshold for degree activity
+            tau_fea: Median threshold for feature strength
 
         Returns:
-            bucket_ids: 每个节点对应的桶编号 [N]，每个元素值为 {1, 2, 3, 4} 之一。
-                        桶编号根据公式 k(v)=1 + 𝟙[g_sa(v)≥τ_deg] + 2·𝟙[g_fs(v)≥τ_fea] 自动计算
+            bucket_ids: Bucket IDs [N], each in {1, 2, 3, 4}.
+                Computed as: k(v) = 1 + 1[g_sa(v) >= tau_deg] + 2 * 1[g_fs(v) >= tau_fea]
         """
-        # 计算结构活跃度: g_sa(v) = log(1 + deg_pub(v))
+        # Structural activity: g_sa(v) = log(1 + deg_pub(v))
         g_sa = torch.log(1 + deg_pub + 1e-8)
-        # 计算特征强度: g_fs(v) = ||x_v||_2
+        # Feature strength: g_fs(v) = ||x_v||_2
         g_fs = feat_norm
 
-        # 桶编号函数: k(v) = 1 + 𝟙[g_sa(v)≥τ_deg] + 2·𝟙[g_fs(v)≥τ_fea]
+        # Bucket function: k(v) = 1 + 1[g_sa(v) >= tau_deg] + 2 * 1[g_fs(v) >= tau_fea]
         bucket_ids = 1 + (g_sa >= tau_deg).long() + \
             2 * (g_fs >= tau_fea).long()
         return bucket_ids
@@ -987,38 +1000,38 @@ class NADES(FraudDetection):
         logger=None,
     ) -> tuple[Tensor, dict]:
         """
-        计算桶条件化TSV（Teacher Specificity Vector）
+        Compute a bucket-conditioned TSV (Teacher Specificity Vector).
 
-        根据文档NADES.MD的描述：
-        1. 选择公共锚点集 V_A ⊂ V_pub
-        2. 基于结构活跃度和特征强度对锚点分桶（2×2，得到4个桶）
-        3. 对每个教师、每个桶，基于教师对锚点的预测计算统计量
+        Following the NADES.MD description:
+        1) Choose a public anchor set V_A ⊂ V_pub
+        2) Bucket anchors by structural activity and feature strength (2x2 -> 4 buckets)
+        3) For each teacher and bucket, compute statistics based on teacher predictions
 
         Args:
-            public_data: 公共图数据
-            teachers: 教师模型列表
-            num_buckets: 桶数量（默认4）
-            anchor_ratio: 锚点比例（默认0.1，即10%）
-            logger: 日志记录器
+            public_data: Public graph data
+            teachers: List of teacher models
+            num_buckets: Number of buckets (default: 4)
+            anchor_ratio: Anchor ratio (default: 0.1 i.e. 10%)
+            logger: Logger
 
         Returns:
-            tsv: TSV张量 [num_teachers, num_buckets, 6]
-            bucket_thresholds: 分桶阈值字典 {tau_deg, tau_fea}
+            tsv: TSV tensor [num_teachers, num_buckets, 6]
+            bucket_thresholds: Threshold dict {tau_deg, tau_fea}
         """
         device = self.device
         num_teachers = len(teachers)
 
-        # 1. 选择公共锚点集 V_A ⊂ V_pub
+        # 1) Choose public anchor set V_A ⊂ V_pub
         num_anchor_nodes = max(1, int(public_data.num_nodes * anchor_ratio))
-        # 随机选择锚点（也可以使用其他策略，如均匀采样）
+        # Randomly sample anchors (other strategies are possible).
         anchor_indices = torch.randperm(public_data.num_nodes, device=device)[
             :num_anchor_nodes]
-        anchor_indices = anchor_indices.sort()[0]  # 排序以便后续使用
+        anchor_indices = anchor_indices.sort()[0]  # Sort for convenience
 
         if logger:
-            logger.info(f"选择 {num_anchor_nodes} 个公共锚点用于TSV计算")
+            logger.info(f"Selected {num_anchor_nodes} public anchor nodes for TSV")
 
-        # 2. 计算锚点的公共语境量
+        # 2) Compute public context quantities for anchors
         deg_pub = self.partitioner._degree_vector(
             public_data).float().to(device)
         feat_norm = torch.norm(public_data.x, dim=1).to(device)
@@ -1026,44 +1039,44 @@ class NADES(FraudDetection):
         anchor_deg = deg_pub[anchor_indices]
         anchor_feat_norm = feat_norm[anchor_indices]
 
-        # 计算结构活跃度: g_sa(v) = log(1 + deg_pub(v))
+        # Structural activity: g_sa(v) = log(1 + deg_pub(v))
         g_sa_anchor = torch.log(1 + anchor_deg + 1e-8)
-        # 计算特征强度: g_fs(v) = ||x_v||_2
+        # Feature strength: g_fs(v) = ||x_v||_2
         g_fs_anchor = anchor_feat_norm
 
-        # 3. 计算中位数阈值
+        # 3) Compute median thresholds
         tau_deg = torch.median(g_sa_anchor).item()
         tau_fea = torch.median(g_fs_anchor).item()
 
         bucket_thresholds = {"tau_deg": tau_deg, "tau_fea": tau_fea}
 
         if logger:
-            logger.info(f"分桶阈值: tau_deg={tau_deg:.4f}, tau_fea={tau_fea:.4f}")
+            logger.info(f"Bucket thresholds: tau_deg={tau_deg:.4f}, tau_fea={tau_fea:.4f}")
 
-        # 4. 对锚点分桶
+        # 4) Bucket anchors
         anchor_bucket_ids = self._compute_bucket_id(
             anchor_deg, anchor_feat_norm, tau_deg, tau_fea
         )
 
-        # 统计每个桶的锚点数量
+        # Count anchors per bucket
         bucket_counts = {}
         for b in range(1, num_buckets + 1):
             bucket_counts[b] = (anchor_bucket_ids == b).sum().item()
             if logger:
-                logger.info(f"桶 {b} 包含 {bucket_counts[b]} 个锚点")
+                logger.info(f"Bucket {b} contains {bucket_counts[b]} anchors")
 
-        # 5. 获取教师对锚点的预测
+        # 5) Get teacher predictions on anchors
         anchor_x = public_data.x[anchor_indices].to(device)
         anchor_edge_index = public_data.edge_index.to(device)
 
-        teacher_preds_anchor = []  # 每个教师的预测 [num_anchor, num_classes]
-        teacher_logits_anchor = []  # 每个教师的logits [num_anchor, num_classes]
+        teacher_preds_anchor = []  # Per-teacher probs [num_anchor, num_classes]
+        teacher_logits_anchor = []  # Per-teacher logits [num_anchor, num_classes]
 
         for teacher in teachers:
             teacher.eval()
             with torch.no_grad():
-                # 注意：教师模型需要在整个公共图上进行预测（因为图结构）
-                # 但我们只关心锚点的预测
+                # Note: Teacher predicts over the whole public graph (graph structure),
+                # but we only use the anchor node outputs.
                 logits_all = teacher(public_data.x.to(
                     device), public_data.edge_index.to(device))
                 logits_anchor = logits_all[anchor_indices]
@@ -1077,26 +1090,27 @@ class NADES(FraudDetection):
         # [num_teachers, num_anchor, num_classes]
         teacher_logits_anchor = torch.stack(teacher_logits_anchor, dim=0)
 
-        # 6. 对每个教师、每个桶计算统计量
+        # 6) Compute stats per teacher and bucket
         tsv_list = []
 
         for teacher_idx in range(num_teachers):
             teacher_tsv_buckets = []
 
             for bucket_id in range(1, num_buckets + 1):
-                # 获取该桶的锚点索引
+                # Anchor indices in this bucket
                 bucket_mask = (anchor_bucket_ids == bucket_id)
                 bucket_anchor_indices_local = torch.where(bucket_mask)[0]
 
                 if len(bucket_anchor_indices_local) == 0:
-                    # 如果桶为空，使用零向量
+                    # Empty bucket -> use zeros
                     teacher_tsv_buckets.append(torch.zeros(6, device=device))
                     if logger:
                         logger.warning(
-                            f"教师 {teacher_idx}, 桶 {bucket_id} 为空，使用零向量")
+                            f"Teacher {teacher_idx}, bucket {bucket_id} is empty; using zeros"
+                        )
                     continue
 
-                # 获取该桶内锚点的预测
+                # Predictions within this bucket
                 # [|V_A^b|, num_classes]
                 preds_bucket = teacher_preds_anchor[teacher_idx,
                                                     bucket_anchor_indices_local]
@@ -1104,13 +1118,13 @@ class NADES(FraudDetection):
                 logits_bucket = teacher_logits_anchor[teacher_idx,
                                                       bucket_anchor_indices_local]
 
-                # 计算top-1和top-2概率和logits
+                # Top-1/Top-2 probabilities and logits
                 top2_probs, top2_indices = torch.topk(
                     preds_bucket, k=2, dim=1)  # [|V_A^b|, 2]
                 p_top1 = top2_probs[:, 0]  # [|V_A^b|]
                 p_top2 = top2_probs[:, 1]  # [|V_A^b|]
 
-                # 获取对应的logits
+                # Corresponding logits
                 batch_indices = torch.arange(
                     len(bucket_anchor_indices_local), device=device)
                 z_top1 = logits_bucket[batch_indices,
@@ -1118,35 +1132,37 @@ class NADES(FraudDetection):
                 z_top2 = logits_bucket[batch_indices,
                                        top2_indices[:, 1]]  # [|V_A^b|]
 
-                # 计算统计量
-                # 1. 平均熵: μ_H^(i,b) = (1/|V_A^b|) Σ_{a∈V_A^b} H(p_a^(i))
+                # Stats:
+                # 1) Mean entropy: μ_H^(i,b) = (1/|V_A^b|) Σ_{a∈V_A^b} H(p_a^(i))
                 entropy = -torch.sum(preds_bucket *
                                      torch.log(preds_bucket + 1e-8), dim=1)
                 mu_H = entropy.mean()
 
-                # 2. 平均概率间隔: μ_M^(i,b) = (1/|V_A^b|) Σ_{a∈V_A^b} (p_{a,1}^(i) - p_{a,2}^(i))
+                # 2) Mean probability margin:
+                #    μ_M^(i,b) = (1/|V_A^b|) Σ_{a∈V_A^b} (p_{a,1}^(i) - p_{a,2}^(i))
                 mu_M = (p_top1 - p_top2).mean()
 
-                # 3. top-1概率分位数: (q_0.25, q_0.5, q_0.75)
+                # 3) Top-1 probability quantiles: (q_0.25, q_0.5, q_0.75)
                 q_25 = torch.quantile(p_top1, 0.25)
                 q_50 = torch.quantile(p_top1, 0.50)
                 q_75 = torch.quantile(p_top1, 0.75)
 
-                # 4. 温度尺度proxy: μ_tp^(i,b) = (1/|V_A^b|) Σ_{a∈V_A^b} log(1+exp(z_{a,1}^(i)-z_{a,2}^(i)))
+                # 4) Temperature-scale proxy:
+                #    μ_tp^(i,b) = (1/|V_A^b|) Σ_{a∈V_A^b} log(1+exp(z_{a,1}^(i)-z_{a,2}^(i)))
                 mu_tp = torch.log(1 + torch.exp(z_top1 - z_top2) + 1e-8).mean()
 
-                # 拼接TSV: [μ_H, μ_M, q_0.25, q_0.5, q_0.75, μ_tp]
+                # TSV: [μ_H, μ_M, q_0.25, q_0.5, q_0.75, μ_tp]
                 tsv_bucket = torch.stack([mu_H, mu_M, q_25, q_50, q_75, mu_tp])
                 teacher_tsv_buckets.append(tsv_bucket)
 
             # [num_buckets, 6]
             tsv_list.append(torch.stack(teacher_tsv_buckets, dim=0))
 
-        # 最终TSV形状: [num_teachers, num_buckets, 6]
+        # Final TSV shape: [num_teachers, num_buckets, 6]
         tsv = torch.stack(tsv_list, dim=0).to(torch.float32)
 
         if logger:
-            logger.info(f"TSV计算完成: shape={tuple(tsv.shape)}")
+            logger.info(f"TSV computation completed: shape={tuple(tsv.shape)}")
 
         return tsv, bucket_thresholds
 
@@ -1165,86 +1181,88 @@ class NADES(FraudDetection):
 
     def _query_pseudo_labels_random_abte(self, pub: Data) -> dict:
         """
-        一次性随机选择self.num_queries个节点，批量计算ABTE预测，然后对每个节点分别加噪，使用RDP核算隐私成本并汇总总成本
-        仅从有标签的训练节点中选择（标签为0或1），排除未标签节点（标签为-1，如elliptic数据集）
+        Randomly select `self.num_queries` nodes (one shot), batch-compute ABTE
+        predictions, then add noise per node. Uses RDP accounting to compute and
+        aggregate the privacy cost.
+
+        Nodes are selected from labeled training nodes only (labels 0/1), excluding
+        unlabeled nodes (label -1, e.g. Elliptic dataset).
         """
 
-        # 获取训练节点索引
+        # Training node indices
         train_node_indices = pub.train_mask.nonzero(as_tuple=True)[
             0].to(self.device)
 
-        # 获取训练节点的标签
+        # Training labels
         train_labels = pub.y[train_node_indices].to(self.device)
 
-        # 检查是否有未标签节点（标签为-1）
-        # 兼容以前的数据集：如果最小标签值 >= 0，说明所有训练节点都是有标签的（标签为0或1）
+        # Check for unlabeled nodes (label -1). Backward-compatible: if min label
+        # >= 0 then all training nodes are labeled (0/1).
         min_label = train_labels.min().item()
         if min_label < 0:
-            # 有未标签节点，只选择标签为0或1的节点
-            labeled_mask = train_labels >= 0  # 标签为0或1的节点（排除-1）
+            # Has unlabeled nodes -> select only labeled nodes (0/1).
+            labeled_mask = train_labels >= 0  # exclude -1
             labeled_train_indices = train_node_indices[labeled_mask]
             self.logger.info(
-                f"训练节点总数: {len(train_node_indices)}, "
-                f"有标签节点数: {len(labeled_train_indices)} (标签为0或1), "
-                f"未标签节点数: {len(train_node_indices) - len(labeled_train_indices)} (标签为-1)"
+                f"Total train nodes: {len(train_node_indices)}, "
+                f"labeled: {len(labeled_train_indices)} (label 0/1), "
+                f"unlabeled: {len(train_node_indices) - len(labeled_train_indices)} (label -1)"
             )
         else:
-            # 兼容以前的数据集：只有两类标签，所有训练节点都是有标签的
+            # All training nodes are labeled.
             labeled_train_indices = train_node_indices
             self.logger.info(
-                f"从训练节点中{len(train_node_indices)}个节点中一次性随机查询 {self.num_queries} 个节点"
+                f"Randomly querying {self.num_queries} nodes from {len(train_node_indices)} train nodes"
             )
 
-        # 确定要查询的节点数量（从有标签的节点中选择）
+        # Number of nodes to query (from labeled nodes)
         num_nodes_to_query = min(self.num_queries, len(labeled_train_indices))
         if num_nodes_to_query < self.num_queries:
             self.logger.warning(
-                f"有标签的训练节点数量 ({len(labeled_train_indices)}) 小于查询数量 ({self.num_queries})，"
-                f"将查询所有 {num_nodes_to_query} 个有标签的训练节点"
+                f"Labeled train nodes ({len(labeled_train_indices)}) < requested queries ({self.num_queries}); "
+                f"querying all {num_nodes_to_query} labeled train nodes"
             )
 
-        # 1. 一次性随机选择self.num_queries个节点（仅从有标签的节点中选择）
+        # 1) Randomly select nodes (from labeled nodes only)
         if num_nodes_to_query < len(labeled_train_indices):
-            # 随机采样
+            # Random sampling
             perm = torch.randperm(
                 len(labeled_train_indices), device=self.device)
             selected_indices_local = perm[:num_nodes_to_query]
             selected_indices = labeled_train_indices[
                 selected_indices_local
-            ]  # 全局节点索引
+            ]  # Global node indices
         else:
-            # 如果节点数不够，使用所有有标签的节点
+            # Not enough nodes -> use all labeled nodes
             selected_indices = labeled_train_indices
 
-        # 学生模型与ABTE模块设置为评估模式
+        # Set student model and ABTE module to eval mode
         self.student.eval()
         if hasattr(self, "attn") and self.attn is not None:
             self.attn.eval()
 
-        # 计算所有训练节点的节点统计
-
-        # 2. 批量获取学生模型对选中节点的预测和嵌入
+        # 2) Batch-get student embeddings for the selected nodes
         with torch.no_grad():
             _, h_v_all = self.student(
                 pub.x.to(self.device),
                 pub.edge_index.to(self.device),
                 return_intermediate=True,
             )
-            # 批量取选中的节点
+            # Gather selected nodes
             # [num_nodes_to_query, hidden_dim]
             selected_h_v = h_v_all[selected_indices]
             selected_node_stats = self.node_stats_cache[
                 selected_indices
             ]  # [num_nodes_to_query, node_stats_dim]
-            # 获取教师预测
+            # Teacher predictions
             selected_teacher_preds = self.teacher_preds_cache[selected_indices].to(
                 self.device
             )  # [num_nodes_to_query, S, num_classes]
 
-            # 计算选中节点的桶编号（如果使用桶条件化TSV）
+            # Bucket IDs for selected nodes (if using bucket-conditioned TSV)
             bucket_ids = None
             if self.bucket_thresholds is not None and self.tsv.dim() == 3:
-                # 计算选中节点的度数和特征范数
+                # Degree and feature norms for selected nodes
                 deg_pub = self.partitioner._degree_vector(
                     self.public_data).float().to(self.device)
                 feat_norm = torch.norm(
@@ -1253,7 +1271,7 @@ class NADES(FraudDetection):
                 selected_deg = deg_pub[selected_indices]
                 selected_feat_norm = feat_norm[selected_indices]
 
-                # 计算桶编号
+                # Bucket IDs
                 bucket_ids = self._compute_bucket_id(
                     selected_deg,
                     selected_feat_norm,
@@ -1261,7 +1279,7 @@ class NADES(FraudDetection):
                     self.bucket_thresholds["tau_fea"],
                 ).to(self.device)
 
-            # 使用Aggregator的批量查询方法进行ABTE聚合
+            # ABTE aggregation via aggregator's batch query
             agg_logits_selected, _ = self.aggregator.batch_query_with_abte(
                 selected_h_v,
                 selected_node_stats,
@@ -1269,18 +1287,18 @@ class NADES(FraudDetection):
                 bucket_ids=bucket_ids,
             )  # [num_nodes_to_query, num_classes]
 
-            # 转换为概率（软标签）
+            # Convert to probabilities (soft labels)
             agg_soft_labels = F.softmax(
                 agg_logits_selected, dim=-1
             )  # [num_nodes_to_query, num_classes]
 
-        # 3. 批量使用Dirichlet机制加噪
-        self.logger.info("对选中的节点进行Dirichlet机制加噪")
+        # 3) Add noise in batch via Dirichlet mechanism
+        self.logger.info("Adding Dirichlet noise to selected nodes")
         noisy_labels = self.aggregator.batch_add_noise(
             agg_soft_labels
         )  # [num_nodes_to_query, num_classes]
 
-        # 保存伪标签和加噪前的软标签
+        # Store pseudo labels and pre-noise soft labels
         pseudo_labels_dict = {}
         pre_soft_labels_dict = {}
         for i, node_idx in enumerate(selected_indices):
@@ -1288,7 +1306,7 @@ class NADES(FraudDetection):
             pseudo_labels_dict[node_idx_item] = noisy_labels[i].detach().cpu()
             pre_soft_labels_dict[node_idx_item] = agg_soft_labels[i].detach(
             ).cpu()
-        # 4. 使用Aggregator的RDP核算方法
+        # 4) RDP accounting
         num_queries = len(pseudo_labels_dict)
         if num_queries > 0:
             rdp_result = self.aggregator.compute_total_rdp_cost(num_queries)
@@ -1298,19 +1316,19 @@ class NADES(FraudDetection):
             self.info["num_queries"] = self.num_queries
 
             if "error" in rdp_result:
-                self.logger.warning(f"RDP核算计算失败: {rdp_result['error']}")
-                self.logger.info("RDP隐私成本核算:")
-                self.logger.info(f"  总查询次数: {num_queries}")
+                self.logger.warning(f"RDP accounting failed: {rdp_result['error']}")
+                self.logger.info("RDP privacy cost accounting:")
+                self.logger.info(f"  Total queries: {num_queries}")
             else:
-                self.logger.info("使用RDP核算方法计算隐私成本:")
+                self.logger.info("Privacy cost via RDP accounting:")
                 self.logger.info(
-                    f"  总查询次数: {rdp_result['total_queries']}，每次查询eta: {rdp_result['eta']:.2f}，"
-                    f"Delta_1_F: {rdp_result['Delta_1_F']:.2f}，gamma: {rdp_result['gamma']:.2f}"
+                    f"  Total queries: {rdp_result['total_queries']}, eta per query: {rdp_result['eta']:.2f}, "
+                    f"Delta_1_F: {rdp_result['Delta_1_F']:.2f}, gamma: {rdp_result['gamma']:.2f}"
                 )
                 self.logger.info(
-                    f"  RDP核算后的最终epsilon (delta={rdp_result['delta']}): {rdp_result['epsilon_final_rdp']:.2f}，"
-                    f"最优RDP阶数alpha: {rdp_result['best_alpha']:.2f}，"
-                    f"有效alpha阶数: {rdp_result['valid_alphas_count']}/{rdp_result['total_alpha_count']}"
+                    f"  Final epsilon via RDP (delta={rdp_result['delta']}): {rdp_result['epsilon_final_rdp']:.2f}, "
+                    f"best alpha: {rdp_result['best_alpha']:.2f}, "
+                    f"valid alphas: {rdp_result['valid_alphas_count']}/{rdp_result['total_alpha_count']}"
                 )
                 if rdp_result["valid_alphas_count"] < rdp_result["total_alpha_count"]:
                     skipped_count = (
@@ -1318,16 +1336,15 @@ class NADES(FraudDetection):
                         - rdp_result["valid_alphas_count"]
                     )
                     self.logger.warning(
-                        f"  {skipped_count}个alpha阶返回inf（可能 <= alpha * Delta_1_F），"
-                        f"这些alpha阶已被跳过"
+                        f"  {skipped_count} alpha orders returned inf (possibly <= alpha * Delta_1_F); skipped"
                     )
 
-                # 保存RDP核算结果
+                # Save RDP accounting results
                 self.rdp_accounting_result = rdp_result
         else:
-            self.logger.warning("未生成任何伪标签，无法进行RDP核算")
+            self.logger.warning("No pseudo labels generated; cannot run RDP accounting")
 
-        # 统计加噪前的软标签分布
+        # Pre-noise soft-label distribution
         if len(pre_soft_labels_dict) > 0:
             fraud_count_pre = 0
             normal_count_pre = 0
@@ -1344,24 +1361,25 @@ class NADES(FraudDetection):
                     else:
                         normal_count_pre += 1
                         normal_probs_pre.append(fraud_prob)
-            self.info["加噪前偏向欺诈"] = fraud_count_pre
+            self.info["pre_noise_fraud_leaning"] = fraud_count_pre
             total_pre = len(pre_soft_labels_dict)
-            self.logger.info("加噪前聚合器软标签分布统计:")
+            self.logger.info("Pre-noise aggregator soft-label distribution:")
             self.logger.info(
-                f"  偏向欺诈: {fraud_count_pre} 个 ({fraud_count_pre / total_pre * 100:.2f}%)偏向正常: {normal_count_pre} 个 ({normal_count_pre / total_pre * 100:.2f}%)"
+                f"  Fraud-leaning: {fraud_count_pre} ({fraud_count_pre / total_pre * 100:.2f}%), "
+                f"normal-leaning: {normal_count_pre} ({normal_count_pre / total_pre * 100:.2f}%)"
             )
             if len(fraud_probs_pre) > 0:
                 self.logger.info(
-                    f"  欺诈标签概率: 均值={sum(fraud_probs_pre) / len(fraud_probs_pre):.4f}, "
-                    f"最大={max(fraud_probs_pre):.4f}, 最小={min(fraud_probs_pre):.4f}"
+                    f"  Fraud-class prob (fraud-leaning) stats: mean={sum(fraud_probs_pre) / len(fraud_probs_pre):.4f}, "
+                    f"max={max(fraud_probs_pre):.4f}, min={min(fraud_probs_pre):.4f}"
                 )
             if len(normal_probs_pre) > 0:
                 self.logger.info(
-                    f"  正常标签概率: 均值={sum(normal_probs_pre) / len(normal_probs_pre):.4f}, "
-                    f"最大={max(normal_probs_pre):.4f}, 最小={min(normal_probs_pre):.4f}"
+                    f"  Fraud-class prob (normal-leaning) stats: mean={sum(normal_probs_pre) / len(normal_probs_pre):.4f}, "
+                    f"max={max(normal_probs_pre):.4f}, min={min(normal_probs_pre):.4f}"
                 )
 
-        # 统计伪标签分布（加噪后）
+        # Post-noise pseudo-label distribution
         if len(pseudo_labels_dict) > 0:
             fraud_count = 0
             normal_count = 0
@@ -1382,10 +1400,11 @@ class NADES(FraudDetection):
                     else:
                         normal_count += 1
                         normal_probs.append(fraud_prob)
-            self.info["加噪后偏向欺诈"] = fraud_count
-            self.logger.info("加噪后伪标签分布统计:")
+            self.info["post_noise_fraud_leaning"] = fraud_count
+            self.logger.info("Post-noise pseudo-label distribution:")
             self.logger.info(
-                f"  偏向欺诈: {fraud_count} 个 ({fraud_count / len(pseudo_labels_dict) * 100:.2f}%)偏向正常: {normal_count} 个 ({normal_count / len(pseudo_labels_dict) * 100:.2f}%)"
+                f"  Fraud-leaning: {fraud_count} ({fraud_count / len(pseudo_labels_dict) * 100:.2f}%), "
+                f"normal-leaning: {normal_count} ({normal_count / len(pseudo_labels_dict) * 100:.2f}%)"
             )
 
             if len(fraud_probs) > 0:
@@ -1393,8 +1412,8 @@ class NADES(FraudDetection):
                 fraud_prob_max = max(fraud_probs)
                 fraud_prob_min = min(fraud_probs)
                 self.logger.info(
-                    f"  欺诈标签概率统计: 均值={fraud_prob_mean:.4f}, "
-                    f"最大={fraud_prob_max:.4f}, 最小={fraud_prob_min:.4f}"
+                    f"  Fraud-class prob (fraud-leaning) stats: mean={fraud_prob_mean:.4f}, "
+                    f"max={fraud_prob_max:.4f}, min={fraud_prob_min:.4f}"
                 )
 
             if len(normal_probs) > 0:
@@ -1402,14 +1421,14 @@ class NADES(FraudDetection):
                 normal_prob_max = max(normal_probs)
                 normal_prob_min = min(normal_probs)
                 self.logger.info(
-                    f"  正常标签概率统计: 均值={normal_prob_mean:.4f}, "
-                    f"最大={normal_prob_max:.4f}, 最小={normal_prob_min:.4f}"
+                    f"  Fraud-class prob (normal-leaning) stats: mean={normal_prob_mean:.4f}, "
+                    f"max={normal_prob_max:.4f}, min={normal_prob_min:.4f}"
                 )
 
-        # 保存到对象，便于其他位置使用
+        # Store for later use
         self.pre_soft_labels_dict = pre_soft_labels_dict
 
-        # 将伪标签转换为tensor并存储到public_data中
+        # Convert pseudo labels to tensors and store in public_data
         pseudo_labels_tensor = torch.zeros(
             (pub.num_nodes, self.out_channels),
             device=self.device,
@@ -1424,83 +1443,87 @@ class NADES(FraudDetection):
         pub.pseudo_labels = pseudo_labels_tensor
         pub.has_pseudo_label = has_pseudo_label
         self.logger.info(
-            f"伪标签已存储到public_data，共 {has_pseudo_label.sum().item()} 个节点有伪标签"
+            f"Pseudo labels saved to public_data; {has_pseudo_label.sum().item()} nodes have pseudo labels"
         )
 
         return pseudo_labels_dict
 
     def _query_pseudo_labels_mean(self, pub: Data) -> dict:
         """
-        消融实验：使用教师预测的平均值生成伪标签（不使用ABTE）
-        一次性随机选择self.num_queries个节点，计算教师预测的平均值，然后对每个节点分别加噪
-        仅从有标签的训练节点中选择（标签为0或1），排除未标签节点（标签为-1，如elliptic数据集）
+        Ablation: generate pseudo labels using the mean of teacher predictions
+        (without ABTE).
+
+        Randomly select `self.num_queries` nodes (one shot), compute the mean of
+        teacher predictions, then add noise per node. Nodes are selected from labeled
+        training nodes only (labels 0/1), excluding unlabeled nodes (label -1, e.g.
+        Elliptic dataset).
         """
-        # 获取训练节点索引
+        # Training node indices
         train_node_indices = pub.train_mask.nonzero(as_tuple=True)[
             0].to(self.device)
 
-        # 获取训练节点的标签
+        # Training labels
         train_labels = pub.y[train_node_indices].to(self.device)
 
-        # 检查是否有未标签节点（标签为-1）
+        # Check for unlabeled nodes (label -1)
         min_label = train_labels.min().item()
         if min_label < 0:
-            # 有未标签节点，只选择标签为0或1的节点
+            # Has unlabeled nodes -> select only labeled nodes (0/1)
             labeled_mask = train_labels >= 0
             labeled_train_indices = train_node_indices[labeled_mask]
             self.logger.info(
-                f"训练节点总数: {len(train_node_indices)}, "
-                f"有标签节点数: {len(labeled_train_indices)} (标签为0或1), "
-                f"未标签节点数: {len(train_node_indices) - len(labeled_train_indices)} (标签为-1)"
+                f"Total train nodes: {len(train_node_indices)}, "
+                f"labeled: {len(labeled_train_indices)} (label 0/1), "
+                f"unlabeled: {len(train_node_indices) - len(labeled_train_indices)} (label -1)"
             )
         else:
             labeled_train_indices = train_node_indices
             self.logger.info(
-                f"从训练节点中{len(train_node_indices)}个节点中一次性随机查询 {self.num_queries} 个节点"
+                f"Randomly querying {self.num_queries} nodes from {len(train_node_indices)} train nodes"
             )
 
-        # 确定要查询的节点数量（从有标签的节点中选择）
+        # Number of nodes to query (from labeled nodes)
         num_nodes_to_query = min(self.num_queries, len(labeled_train_indices))
         if num_nodes_to_query < self.num_queries:
             self.logger.warning(
-                f"有标签的训练节点数量 ({len(labeled_train_indices)}) 小于查询数量 ({self.num_queries})，"
-                f"将查询所有 {num_nodes_to_query} 个有标签的训练节点"
+                f"Labeled train nodes ({len(labeled_train_indices)}) < requested queries ({self.num_queries}); "
+                f"querying all {num_nodes_to_query} labeled train nodes"
             )
 
-        # 1. 一次性随机选择self.num_queries个节点（仅从有标签的节点中选择）
+        # 1) Randomly select nodes (from labeled nodes only)
         if num_nodes_to_query < len(labeled_train_indices):
-            # 随机采样
+            # Random sampling
             perm = torch.randperm(
                 len(labeled_train_indices), device=self.device)
             selected_indices_local = perm[:num_nodes_to_query]
             selected_indices = labeled_train_indices[
                 selected_indices_local
-            ]  # 全局节点索引
+            ]  # Global node indices
         else:
-            # 如果节点数不够，使用所有有标签的节点
+            # Not enough nodes -> use all labeled nodes
             selected_indices = labeled_train_indices
 
-        # 2. 获取教师预测并计算平均值
+        # 2) Mean teacher predictions
         with torch.no_grad():
-            # 获取选中节点的教师预测 [num_nodes_to_query, S, num_classes]
+            # Teacher predictions for selected nodes: [num_nodes_to_query, S, num_classes]
             selected_teacher_preds = self.teacher_preds_cache[selected_indices].to(
                 self.device
             )
 
-            # 计算教师预测的平均值 [num_nodes_to_query, num_classes]
+            # Mean over teachers: [num_nodes_to_query, num_classes]
             # selected_teacher_preds: [num_nodes_to_query, S, num_classes]
             # mean along teacher dimension (dim=1)
             mean_soft_labels = selected_teacher_preds.mean(
                 dim=1
             )  # [num_nodes_to_query, num_classes]
 
-        # 3. 批量使用Dirichlet机制加噪
-        self.logger.info("对选中的节点进行Dirichlet机制加噪（基于教师平均预测）")
+        # 3) Add noise in batch via Dirichlet mechanism
+        self.logger.info("Adding Dirichlet noise to selected nodes (mean teacher predictions)")
         noisy_labels = self.aggregator.batch_add_noise(
             mean_soft_labels
         )  # [num_nodes_to_query, num_classes]
 
-        # 保存伪标签和加噪前的软标签
+        # Store pseudo labels and pre-noise soft labels
         pseudo_labels_dict = {}
         pre_soft_labels_dict = {}
         for i, node_idx in enumerate(selected_indices):
@@ -1509,7 +1532,7 @@ class NADES(FraudDetection):
             pre_soft_labels_dict[node_idx_item] = mean_soft_labels[i].detach(
             ).cpu()
 
-        # 4. 使用Aggregator的RDP核算方法
+        # 4) RDP accounting
         num_queries = len(pseudo_labels_dict)
         if num_queries > 0:
             rdp_result = self.aggregator.compute_total_rdp_cost(num_queries)
@@ -1519,19 +1542,19 @@ class NADES(FraudDetection):
             self.info["num_queries"] = self.num_queries
 
             if "error" in rdp_result:
-                self.logger.warning(f"RDP核算计算失败: {rdp_result['error']}")
-                self.logger.info("RDP隐私成本核算:")
-                self.logger.info(f"  总查询次数: {num_queries}")
+                self.logger.warning(f"RDP accounting failed: {rdp_result['error']}")
+                self.logger.info("RDP privacy cost accounting:")
+                self.logger.info(f"  Total queries: {num_queries}")
             else:
-                self.logger.info("使用RDP核算方法计算隐私成本（基于教师平均预测）:")
+                self.logger.info("Privacy cost via RDP accounting (mean teacher predictions):")
                 self.logger.info(
-                    f"  总查询次数: {rdp_result['total_queries']}，每次查询eta: {rdp_result['eta']:.2f}，"
-                    f"Delta_1_F: {rdp_result['Delta_1_F']:.2f}，gamma: {rdp_result['gamma']:.2f}"
+                    f"  Total queries: {rdp_result['total_queries']}, eta per query: {rdp_result['eta']:.2f}, "
+                    f"Delta_1_F: {rdp_result['Delta_1_F']:.2f}, gamma: {rdp_result['gamma']:.2f}"
                 )
                 self.logger.info(
-                    f"  RDP核算后的最终epsilon (delta={rdp_result['delta']}): {rdp_result['epsilon_final_rdp']:.2f}，"
-                    f"最优RDP阶数alpha: {rdp_result['best_alpha']:.2f}，"
-                    f"有效alpha阶数: {rdp_result['valid_alphas_count']}/{rdp_result['total_alpha_count']}"
+                    f"  Final epsilon via RDP (delta={rdp_result['delta']}): {rdp_result['epsilon_final_rdp']:.2f}, "
+                    f"best alpha: {rdp_result['best_alpha']:.2f}, "
+                    f"valid alphas: {rdp_result['valid_alphas_count']}/{rdp_result['total_alpha_count']}"
                 )
                 if rdp_result["valid_alphas_count"] < rdp_result["total_alpha_count"]:
                     skipped_count = (
@@ -1539,16 +1562,15 @@ class NADES(FraudDetection):
                         - rdp_result["valid_alphas_count"]
                     )
                     self.logger.warning(
-                        f"  {skipped_count}个alpha阶返回inf（可能 <= alpha * Delta_1_F），"
-                        f"这些alpha阶已被跳过"
+                        f"  {skipped_count} alpha orders returned inf (possibly <= alpha * Delta_1_F); skipped"
                     )
 
-                # 保存RDP核算结果
+                # Save RDP accounting results
                 self.rdp_accounting_result = rdp_result
         else:
-            self.logger.warning("未生成任何伪标签，无法进行RDP核算")
+            self.logger.warning("No pseudo labels generated; cannot run RDP accounting")
 
-        # 统计加噪前的软标签分布
+        # Pre-noise soft-label distribution
         if len(pre_soft_labels_dict) > 0:
             fraud_count_pre = 0
             normal_count_pre = 0
@@ -1565,25 +1587,25 @@ class NADES(FraudDetection):
                     else:
                         normal_count_pre += 1
                         normal_probs_pre.append(fraud_prob)
-            self.info["加噪前偏向欺诈(mean)"] = fraud_count_pre
+            self.info["pre_noise_fraud_leaning_mean"] = fraud_count_pre
             total_pre = len(pre_soft_labels_dict)
-            self.logger.info("加噪前教师平均预测分布统计:")
+            self.logger.info("Pre-noise mean-teacher soft-label distribution:")
             self.logger.info(
-                f"  偏向欺诈: {fraud_count_pre} 个 ({fraud_count_pre / total_pre * 100:.2f}%)，"
-                f"偏向正常: {normal_count_pre} 个 ({normal_count_pre / total_pre * 100:.2f}%)"
+                f"  Fraud-leaning: {fraud_count_pre} ({fraud_count_pre / total_pre * 100:.2f}%), "
+                f"normal-leaning: {normal_count_pre} ({normal_count_pre / total_pre * 100:.2f}%)"
             )
             if len(fraud_probs_pre) > 0:
                 self.logger.info(
-                    f"  欺诈标签概率: 均值={sum(fraud_probs_pre) / len(fraud_probs_pre):.4f}, "
-                    f"最大={max(fraud_probs_pre):.4f}, 最小={min(fraud_probs_pre):.4f}"
+                    f"  Fraud-class prob (fraud-leaning) stats: mean={sum(fraud_probs_pre) / len(fraud_probs_pre):.4f}, "
+                    f"max={max(fraud_probs_pre):.4f}, min={min(fraud_probs_pre):.4f}"
                 )
             if len(normal_probs_pre) > 0:
                 self.logger.info(
-                    f"  正常标签概率: 均值={sum(normal_probs_pre) / len(normal_probs_pre):.4f}, "
-                    f"最大={max(normal_probs_pre):.4f}, 最小={min(normal_probs_pre):.4f}"
+                    f"  Fraud-class prob (normal-leaning) stats: mean={sum(normal_probs_pre) / len(normal_probs_pre):.4f}, "
+                    f"max={max(normal_probs_pre):.4f}, min={min(normal_probs_pre):.4f}"
                 )
 
-        # 统计伪标签分布（加噪后）
+        # Post-noise pseudo-label distribution
         if len(pseudo_labels_dict) > 0:
             fraud_count = 0
             normal_count = 0
@@ -1604,11 +1626,11 @@ class NADES(FraudDetection):
                     else:
                         normal_count += 1
                         normal_probs.append(fraud_prob)
-            self.info["加噪后偏向欺诈(mean)"] = fraud_count
-            self.logger.info("加噪后伪标签分布统计（基于教师平均预测）:")
+            self.info["post_noise_fraud_leaning_mean"] = fraud_count
+            self.logger.info("Post-noise pseudo-label distribution (mean teacher predictions):")
             self.logger.info(
-                f"  偏向欺诈: {fraud_count} 个 ({fraud_count / len(pseudo_labels_dict) * 100:.2f}%)，"
-                f"偏向正常: {normal_count} 个 ({normal_count / len(pseudo_labels_dict) * 100:.2f}%)"
+                f"  Fraud-leaning: {fraud_count} ({fraud_count / len(pseudo_labels_dict) * 100:.2f}%), "
+                f"normal-leaning: {normal_count} ({normal_count / len(pseudo_labels_dict) * 100:.2f}%)"
             )
 
             if len(fraud_probs) > 0:
@@ -1616,8 +1638,8 @@ class NADES(FraudDetection):
                 fraud_prob_max = max(fraud_probs)
                 fraud_prob_min = min(fraud_probs)
                 self.logger.info(
-                    f"  欺诈标签概率统计: 均值={fraud_prob_mean:.4f}, "
-                    f"最大={fraud_prob_max:.4f}, 最小={fraud_prob_min:.4f}"
+                    f"  Fraud-class prob (fraud-leaning) stats: mean={fraud_prob_mean:.4f}, "
+                    f"max={fraud_prob_max:.4f}, min={fraud_prob_min:.4f}"
                 )
 
             if len(normal_probs) > 0:
@@ -1625,14 +1647,14 @@ class NADES(FraudDetection):
                 normal_prob_max = max(normal_probs)
                 normal_prob_min = min(normal_probs)
                 self.logger.info(
-                    f"  正常标签概率统计: 均值={normal_prob_mean:.4f}, "
-                    f"最大={normal_prob_max:.4f}, 最小={normal_prob_min:.4f}"
+                    f"  Fraud-class prob (normal-leaning) stats: mean={normal_prob_mean:.4f}, "
+                    f"max={normal_prob_max:.4f}, min={normal_prob_min:.4f}"
                 )
 
-        # 保存到对象，便于其他位置使用
+        # Store for later use
         self.pre_soft_labels_dict = pre_soft_labels_dict
 
-        # 将伪标签转换为tensor并存储到public_data中
+        # Convert pseudo labels to tensors and store in public_data
         pseudo_labels_tensor = torch.zeros(
             (pub.num_nodes, self.out_channels),
             device=self.device,
@@ -1647,23 +1669,25 @@ class NADES(FraudDetection):
         pub.pseudo_labels = pseudo_labels_tensor
         pub.has_pseudo_label = has_pseudo_label
         self.logger.info(
-            f"伪标签已存储到public_data（基于教师平均预测），共 {has_pseudo_label.sum().item()} 个节点有伪标签"
+            f"Pseudo labels saved to public_data (mean teacher predictions); "
+            f"{has_pseudo_label.sum().item()} nodes have pseudo labels"
         )
 
         return pseudo_labels_dict
 
     def _evaluate_abte_upper_bound(self):
         """
-        使用 ABTE 聚合器在所有公开节点上生成无噪声伪标签，
-        并与公开数据的真实标签对比，评估理论上限性能。
+        Generate noise-free pseudo labels on all public nodes with the ABTE
+        aggregator and compare with public ground-truth labels to estimate an
+        upper-bound performance.
         """
 
         if self.public_data is None:
-            self.logger.warning("public_data 未初始化，无法评估 ABTE 理论上限")
+            self.logger.warning("public_data is not initialized; cannot evaluate ABTE upper bound")
             return None
 
         if not hasattr(self, "aggregator") or self.aggregator is None:
-            self.logger.warning("aggregator 未初始化，无法评估 ABTE 理论上限")
+            self.logger.warning("aggregator is not initialized; cannot evaluate ABTE upper bound")
             return None
 
         teacher_preds = getattr(self, "teacher_preds_cache", None)
@@ -1671,7 +1695,7 @@ class NADES(FraudDetection):
 
         if teacher_preds is None or node_stats is None:
             self.logger.warning(
-                "缺少 teacher 预测或节点统计缓存，无法评估 ABTE 理论上限"
+                "Missing teacher prediction cache or node-statistics cache; cannot evaluate ABTE upper bound"
             )
             return None
 
@@ -1701,7 +1725,7 @@ class NADES(FraudDetection):
         labels = pub.y.detach().cpu()
         metrics = evaluate(labels, agg_logits.detach().cpu())
 
-        self.logger.info("ABTE 理论上限评估（使用公开标签，无隐私噪声）: %s", metrics)
+        self.logger.info("ABTE upper-bound evaluation (public labels, no privacy noise): %s", metrics)
 
         pub.abte_upper_bound_logits = agg_logits.detach().cpu()
         pub.abte_upper_bound_probs = agg_probs.detach().cpu()

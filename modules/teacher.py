@@ -47,7 +47,6 @@ class TeacherModule(TrainableModule):
             mask = data.test_mask if hasattr(data, "test_mask") else None
 
         if mask is None:
-            # 无掩码则视为全量
             logits_masked = logits
             y_masked = data.y.to(device)
         else:
@@ -56,7 +55,6 @@ class TeacherModule(TrainableModule):
 
         loss = None
         if stage != "test":
-            # 只对标签为0和1的节点计算loss，忽略标签为-1的未标签节点
             label_mask = y_masked != -1
             if label_mask.any():
                 logits_labeled = logits_masked[label_mask]
@@ -64,7 +62,6 @@ class TeacherModule(TrainableModule):
                 loss = F.cross_entropy(
                     logits_labeled, y_labeled, weight=global_weights)
             else:
-                # 如果没有有效的标签节点，loss设为0
                 loss = torch.tensor(0.0, device=device, requires_grad=True)
 
         return loss, logits_labeled.detach(), y_labeled.detach()
@@ -98,7 +95,6 @@ class TeacherFL(nn.Module):
         self.fc = Linear(hidden_channels, out_channels)
 
     def forward(self, x, edge_index):
-        # 初始特征增强
         x = self.feature_enhancement(x)
         x = F.tanh(x)
         x = F.dropout(x, p=self.dropout, training=self.training)

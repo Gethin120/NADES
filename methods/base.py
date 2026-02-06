@@ -109,16 +109,6 @@ class FraudDetection(MethodBase):
         """Fit the model to the given data."""
         self.data = data
         metrics = self._train(self.data, prefix=prefix)
-        # print(metrics)
-        # self.logger.info(f'Train metrics: {metrics}')
-        # test_metrics = self.test(self.data, prefix=prefix)
-        # print(test_metrics)
-
-        # self._train_mini_batch(self.data)
-        # self._train_all(self.data)
-        # train_metrics = self._train(self.data)
-        # test_metrics = self.test(self.data, prefix=prefix)
-        # return {**train_metrics, **test_metrics}
         return metrics
 
     def test(self, data: Optional[Data] = None, prefix: str = "") -> Metrics:

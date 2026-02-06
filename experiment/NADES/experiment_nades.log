@@ -1,0 +1,70 @@
+2026-02-06 09:20:18,827 - INFO - Starting training with method NADES in dataset amazon
+2026-02-06 09:20:18,827 - INFO - Namespace(model='NADES', num_layers=2, hidden_channels=128, out_channels=2, dataset='amazon', detection_type='txs', num_neighbors=3, batch_size=1024, lr=0.001, dropout=0.2, epochs=1000, early_stopping=30, epsilon=30.0, delta=1e-05, grad_norm_max=1.0, privacy_ratio=0.7, partition_method='D', teacher_epochs=50, teacher_patience=20, num_partitions=15, max_overlap_per_node=2, num_queries=200, consistency_weight=1.0, ssl_method='none', noise_scale=5.0, num_teachers=10, confidence_threshold=8, gaussian_noise_scale=25.0, detection_epsilon=0.01, bgnn_alpha=1.0, bgnn_gamma=1.0, bgnn_temperature=1.0, bgnn_boosting=False, bgnn_temp=False, privgnn_max_degree=100, privgnn_conv='sage')
+2026-02-06 09:20:20,001 - INFO - (1) Prepare private and public data
+2026-02-06 09:20:20,082 - INFO - (2) 使用D方法进行图划分和子图提取
+2026-02-06 09:20:20,083 - INFO - 开始执行 [方法 D：CAOP法] (S=15, s_max=2)
+2026-02-06 09:20:20,341 - INFO - ... 分配 8360 个节点到 15 个社区 (s_max=2) ...
+2026-02-06 09:20:23,043 - INFO - ... 生成子图 ...
+2026-02-06 09:20:23,097 - INFO - 过滤掉 1 个整体标签不含 0/1 的子图
+2026-02-06 09:20:23,097 - INFO - 过滤掉 2 个验证集标签不含 0/1 的子图
+2026-02-06 09:20:23,097 - INFO - ... 构建完成，共 12 个子图 ...
+2026-02-06 09:20:23,097 - INFO - 划分完成: 方法: D, 子图数量: 12, s_max: 2
+2026-02-06 09:20:23,098 - INFO - (3) Train teachers with Trainer
+2026-02-06 09:20:23,198 - INFO - Teacher 1/12 training:
+2026-02-06 09:20:26,951 - INFO - Best metrics: {'teacher/epoch': 7, 'teacher/train/auc': 0.5596153846153846, 'teacher/train/loss': 0.08600489795207977, 'teacher/val/auc': 0.9477611940298507, 'teacher/val/loss': 0.08359580487012863}
+2026-02-06 09:20:26,966 - INFO - Teacher 2/12 training:
+2026-02-06 09:20:29,082 - INFO - Best metrics: {'teacher/epoch': 48, 'teacher/train/auc': 0.989557210031348, 'teacher/train/loss': 0.017353501170873642, 'teacher/val/auc': 0.9419668381932533, 'teacher/val/loss': 0.05374108999967575}
+2026-02-06 09:20:29,085 - INFO - Teacher 3/12 training:
+2026-02-06 09:20:31,186 - INFO - Best metrics: {'teacher/epoch': 25, 'teacher/train/auc': 0.9892043592264831, 'teacher/train/loss': 0.013120343908667564, 'teacher/val/auc': 0.996045867931989, 'teacher/val/loss': 0.010997205972671509}
+2026-02-06 09:20:31,188 - INFO - Teacher 4/12 training:
+2026-02-06 09:20:33,589 - INFO - Best metrics: {'teacher/epoch': 26, 'teacher/train/auc': 0.8672961913755114, 'teacher/train/loss': 0.057757530361413956, 'teacher/val/auc': 0.8221726190476191, 'teacher/val/loss': 0.09889839589595795}
+2026-02-06 09:20:33,589 - INFO - Teacher 5/12 training:
+2026-02-06 09:20:36,583 - INFO - Best metrics: {'teacher/epoch': 39, 'teacher/train/auc': 0.9212726632635099, 'teacher/train/loss': 0.04387417435646057, 'teacher/val/auc': 0.9965596330275229, 'teacher/val/loss': 0.022895801812410355}
+2026-02-06 09:20:36,584 - INFO - Teacher 6/12 training:
+2026-02-06 09:20:38,368 - INFO - Best metrics: {'teacher/epoch': 18, 'teacher/train/auc': 0.5931789376656297, 'teacher/train/loss': 0.08587579429149628, 'teacher/val/auc': 0.5412935323383085, 'teacher/val/loss': 0.08598023653030396}
+2026-02-06 09:20:38,369 - INFO - Teacher 7/12 training:
+2026-02-06 09:20:39,264 - INFO - Best metrics: {'teacher/epoch': 1, 'teacher/train/auc': 0.5211605987802624, 'teacher/train/loss': 0.08677541464567184, 'teacher/val/auc': 0.5621761658031088, 'teacher/val/loss': 0.0865543782711029}
+2026-02-06 09:20:39,264 - INFO - Teacher 8/12 training:
+2026-02-06 09:20:41,430 - INFO - Best metrics: {'teacher/epoch': 49, 'teacher/train/auc': 0.9588807785888078, 'teacher/train/loss': 0.03287375718355179, 'teacher/val/auc': 0.9460431654676259, 'teacher/val/loss': 0.04599732905626297}
+2026-02-06 09:20:41,431 - INFO - Teacher 9/12 training:
+2026-02-06 09:20:42,386 - INFO - Best metrics: {'teacher/epoch': 1, 'teacher/train/auc': 0.8706395348837209, 'teacher/train/loss': 0.08332260698080063, 'teacher/val/auc': 0.9418604651162791, 'teacher/val/loss': 0.08606532961130142}
+2026-02-06 09:20:42,387 - INFO - Teacher 10/12 training:
+2026-02-06 09:20:43,320 - INFO - Best metrics: {'teacher/epoch': 2, 'teacher/train/auc': 0.5833333333333333, 'teacher/train/loss': 0.08611989766359329, 'teacher/val/auc': 0.5915492957746479, 'teacher/val/loss': 0.08599486947059631}
+2026-02-06 09:20:43,321 - INFO - Teacher 11/12 training:
+2026-02-06 09:20:45,434 - INFO - Best metrics: {'teacher/epoch': 14, 'teacher/train/auc': 0.46810571468105716, 'teacher/train/loss': 0.08694429695606232, 'teacher/val/auc': 0.5660504201680672, 'teacher/val/loss': 0.08591006696224213}
+2026-02-06 09:20:45,440 - INFO - Teacher 12/12 training:
+2026-02-06 09:20:47,853 - INFO - Best metrics: {'teacher/epoch': 31, 'teacher/train/auc': 0.9765384512433416, 'teacher/train/loss': 0.02239028923213482, 'teacher/val/auc': 0.9976450798990749, 'teacher/val/loss': 0.007730583660304546}
+2026-02-06 09:20:47,856 - INFO - (3.5) Compute bucket-conditioned TSV
+2026-02-06 09:20:47,868 - INFO - 选择 358 个公共锚点用于TSV计算
+2026-02-06 09:20:47,878 - INFO - 分桶阈值: tau_deg=4.6540, tau_fea=39.9625
+2026-02-06 09:20:47,879 - INFO - 桶 1 包含 114 个锚点
+2026-02-06 09:20:47,879 - INFO - 桶 2 包含 64 个锚点
+2026-02-06 09:20:47,880 - INFO - 桶 3 包含 64 个锚点
+2026-02-06 09:20:47,880 - INFO - 桶 4 包含 116 个锚点
+2026-02-06 09:20:48,127 - INFO - TSV计算完成: shape=(12, 4, 6)
+2026-02-06 09:20:48,132 - INFO - (4) Student SSL pretraining on public
+2026-02-06 09:20:48,132 - INFO - 跳过SSL预训练：编码器保持随机初始化状态，将使用随机初始化的编码器对节点特征进行编码以生成NHV
+2026-02-06 09:20:48,133 - INFO - SSL pretraining completed
+2026-02-06 09:20:48,133 - INFO - (5) Generate privacy-preserving pseudo labels
+2026-02-06 09:20:48,314 - INFO - 从训练节点中2508个节点中一次性随机查询 200 个节点
+2026-02-06 09:20:48,344 - INFO - 对选中的节点进行Dirichlet机制加噪
+2026-02-06 09:20:48,484 - INFO - 使用RDP核算方法计算隐私成本:
+2026-02-06 09:20:48,484 - INFO -   总查询次数: 200，每次查询eta: 30.00，Delta_1_F: 6.00，gamma: 1.00
+2026-02-06 09:20:48,484 - INFO -   RDP核算后的最终epsilon (delta=1e-05): 51.76，最优RDP阶数alpha: 2.90，有效alpha阶数: 39/287
+2026-02-06 09:20:48,484 - WARNING -   248个alpha阶返回inf（可能 <= alpha * Delta_1_F），这些alpha阶已被跳过
+2026-02-06 09:20:48,485 - INFO - 加噪前聚合器软标签分布统计:
+2026-02-06 09:20:48,486 - INFO -   偏向欺诈: 11 个 (5.50%)偏向正常: 189 个 (94.50%)
+2026-02-06 09:20:48,486 - INFO -   欺诈标签概率: 均值=0.8283, 最大=0.9759, 最小=0.5536
+2026-02-06 09:20:48,486 - INFO -   正常标签概率: 均值=0.2142, 最大=0.4896, 最小=0.0973
+2026-02-06 09:20:48,487 - INFO - 加噪后伪标签分布统计:
+2026-02-06 09:20:48,487 - INFO -   偏向欺诈: 32 个 (16.00%)偏向正常: 168 个 (84.00%)
+2026-02-06 09:20:48,487 - INFO -   欺诈标签概率统计: 均值=0.6413, 最大=0.9619, 最小=0.5011
+2026-02-06 09:20:48,487 - INFO -   正常标签概率统计: 均值=0.2493, 最大=0.4918, 最小=0.0181
+2026-02-06 09:20:48,497 - INFO - 伪标签已存储到public_data，共 200 个节点有伪标签
+2026-02-06 09:20:48,502 - INFO - Has pseudo and true label: 193: normal, 7: fraud
+2026-02-06 09:20:48,502 - INFO - Pseudo label generation completed
+2026-02-06 09:20:48,502 - INFO - (6) Semi-supervised fine-tuning with pseudo labels
+2026-02-06 09:21:08,333 - INFO - Best metrics: {'finetune/epoch': 52, 'finetune/train/auc': 0.9356677841883674, 'finetune/train/loss': 0.4653807580471039, 'finetune/val/auc': 0.9278947368421051, 'finetune/val/loss': 0.46978238224983215, 'finetune/test/auc': 0.9124, 'finetune/test/gmean': 0.8231, 'finetune/test/f1_macro': 0.836, 'finetune/test/recall': 0.6897, 'finetune/test/ap': 0.7242}
+2026-02-06 09:21:08,333 - INFO - Semi-supervised finetune completed
+2026-02-06 09:21:08,333 - INFO - {'partition_method': 'D', 'num_subgraphs': 12, 'max_overlap_per_node': 2, 'ssl_method': 'none (random initialization)', 'eta': 30.0, 'epsilon_final': 51.76, 'num_queries': 200, '加噪前偏向欺诈': 11, '加噪后偏向欺诈': 32, 'finetune_patience': 30, 'finetune_best_metrics': {'finetune/epoch': 52, 'finetune/train/auc': 0.9356677841883674, 'finetune/train/loss': 0.4653807580471039, 'finetune/val/auc': 0.9278947368421051, 'finetune/val/loss': 0.46978238224983215, 'finetune/test/auc': 0.9124, 'finetune/test/gmean': 0.8231, 'finetune/test/f1_macro': 0.836, 'finetune/test/recall': 0.6897, 'finetune/test/ap': 0.7242}}
+2026-02-06 09:21:08,333 - INFO - self.info 已写入 /home/workspace/Dataset/PDP-GKD/pdp_gkd_info.csv
